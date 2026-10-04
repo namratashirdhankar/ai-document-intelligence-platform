@@ -16,3 +16,21 @@ test('worker executes OCR then LLM and marks completed', async () => {
   assert.equal(result.total, 100);
   assert.ok(calls.some(([sql]) => sql.includes("status='completed'")));
 });
+
+test('worker marks document failed when OCR fails', async () => {
+  const file = '/tmp/aidoc-worker-failure.txt';
+  fs.writeFileSync(file, 'fake');
+  const calls = [];
+  const pool = { query: async (sql, args) => { calls.push([sql,args]); return { rows: [] }; } };
+  const fetchFn = async () => new Response('bad gateway', { status: 502 });
+
+  await assert.rejects(
+    () => processDocument(
+      { documentId:'00000000-0000-0000-0000-000000000002', filePath:file },
+      { pool, ocrUrl:'http://ocr', llmUrl:'http://llm', fetchFn }
+    ),
+    /OCR failed: 502/
+  );
+
+  assert.ok(calls.some(([sql]) => sql.includes("status='failed'")));
+});
