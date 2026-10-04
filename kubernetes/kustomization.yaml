@@ -1,0 +1,9 @@
+resources:
+- configmap.yaml
+- secret.example.yaml
+- storage.yaml
+- data-services.yaml
+- apps.yaml
+- frontend.yaml
+- hpa.yaml
+- ingress.yaml

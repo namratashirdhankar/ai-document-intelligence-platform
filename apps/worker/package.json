@@ -1,0 +1,7 @@
+{
+  "name": "worker",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {"start":"node src/index.js","test":"node --test"},
+  "dependencies": {"bullmq":"^5.58.5","ioredis":"^5.7.0","pg":"^8.16.3"}
+}

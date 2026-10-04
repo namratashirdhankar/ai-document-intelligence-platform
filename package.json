@@ -1,0 +1,8 @@
+{
+  "name": "ai-document-intelligence-platform",
+  "private": true,
+  "workspaces": ["apps/api", "apps/worker"],
+  "scripts": {
+    "test": "npm run test -w apps/api && npm run test -w apps/worker"
+  }
+}

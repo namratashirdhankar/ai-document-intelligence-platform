@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: aidoc-config }
+data:
+  DATABASE_URL: postgresql://app:app@postgres:5432/documents
+  REDIS_URL: redis://redis:6379
+  OCR_URL: http://ocr-service:8000
+  LLM_URL: http://llm-service:8001
+  UPLOAD_DIR: /data/uploads
