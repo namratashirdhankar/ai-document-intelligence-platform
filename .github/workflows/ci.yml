@@ -15,7 +15,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
       - run: npm install
       - run: npm test
 
@@ -38,7 +37,7 @@ jobs:
   docker-e2e:
     name: Docker Compose end-to-end
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -51,92 +50,122 @@ jobs:
       - name: Start stack
         run: docker compose up -d
 
-      - name: Wait for API
+      - name: Wait for frontend and API
         shell: bash
         run: |
           set -euo pipefail
           for i in {1..60}; do
-            if curl -fsS http://localhost:3000/health >/dev/null; then
-              echo "API is healthy"
+            if curl -fsS http://localhost:3000/health >/dev/null && curl -fsS http://localhost:8080/ >/dev/null; then
+              echo "Stack is healthy"
+              docker compose ps
               exit 0
             fi
             sleep 2
           done
-          echo "API did not become healthy"
+          echo "Stack did not become healthy"
           docker compose ps
           exit 1
 
-      - name: Create sample invoice
+      - name: Create sample invoice image and PDF
         run: |
           python -m pip install --quiet pillow
           python - <<'PY'
           from PIL import Image, ImageDraw, ImageFont
 
-          image = Image.new("RGB", (1400, 700), "white")
+          image = Image.new("RGB", (1600, 800), "white")
           draw = ImageDraw.Draw(image)
           font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-          title = ImageFont.truetype(font_path, 58)
-          body = ImageFont.truetype(font_path, 46)
+          title = ImageFont.truetype(font_path, 64)
+          body = ImageFont.truetype(font_path, 50)
 
-          draw.text((70, 60), "INVOICE", fill="black", font=title)
-          draw.text((70, 170), "Invoice No: INV-42", fill="black", font=body)
-          draw.text((70, 260), "Vendor: Example Technologies Pvt Ltd", fill="black", font=body)
-          draw.text((70, 350), "Date: 2026-10-04", fill="black", font=body)
-          draw.text((70, 440), "Subtotal: 1000.00", fill="black", font=body)
-          draw.text((70, 530), "Tax: 250.50", fill="black", font=body)
-          draw.text((70, 610), "Total: 1250.50", fill="black", font=body)
+          lines = [
+              ("INVOICE", title),
+              ("Invoice No: INV-42", body),
+              ("Vendor: Example Technologies Pvt Ltd", body),
+              ("Date: 2026-10-04", body),
+              ("Subtotal: 1000.00", body),
+              ("Tax: 250.50", body),
+              ("Total: 1250.50", body),
+          ]
+
+          y = 50
+          for text, font in lines:
+              draw.text((70, y), text, fill="black", font=font)
+              y += 100
+
           image.save("/tmp/invoice.png")
+          image.save("/tmp/invoice.pdf", "PDF", resolution=150.0)
           PY
 
-      - name: Upload and verify document processing
+      - name: Verify image and PDF end to end through frontend proxy
         shell: bash
         run: |
           set -euo pipefail
 
-          curl -fsS             -F "file=@/tmp/invoice.png"             http://localhost:3000/documents             > /tmp/upload.json
+          verify_document() {
+            local file="$1"
+            local expected_invoice="$2"
+            local expected_total="$3"
 
-          cat /tmp/upload.json
-          DOCUMENT_ID="$(python -c 'import json; print(json.load(open("/tmp/upload.json"))["id"])')"
+            curl -fsS               -F "file=@$file"               http://localhost:8080/api/documents               > /tmp/upload.json
 
-          completed=false
-          for i in {1..60}; do
-            curl -fsS "http://localhost:3000/documents/$DOCUMENT_ID" > /tmp/result.json
-            STATUS="$(python -c 'import json; print(json.load(open("/tmp/result.json"))["status"])')"
-            echo "Attempt $i: $STATUS"
+            cat /tmp/upload.json
+            DOCUMENT_ID="$(python -c 'import json; print(json.load(open("/tmp/upload.json"))["id"])')"
 
-            if [ "$STATUS" = "completed" ]; then
-              completed=true
-              break
-            fi
+            completed=false
+            for i in {1..60}; do
+              curl -fsS "http://localhost:8080/api/documents/$DOCUMENT_ID" > /tmp/result.json
+              STATUS="$(python -c 'import json; print(json.load(open("/tmp/result.json"))["status"])')"
+              echo "$file attempt $i: $STATUS"
 
-            if [ "$STATUS" = "failed" ]; then
+              if [ "$STATUS" = "completed" ]; then
+                completed=true
+                break
+              fi
+
+              if [ "$STATUS" = "failed" ]; then
+                cat /tmp/result.json
+                return 1
+              fi
+
+              sleep 2
+            done
+
+            if [ "$completed" != "true" ]; then
+              echo "Timed out processing $file"
               cat /tmp/result.json
-              exit 1
+              return 1
             fi
 
-            sleep 2
-          done
-
-          if [ "$completed" != "true" ]; then
-            echo "Document processing timed out"
-            cat /tmp/result.json
-            exit 1
-          fi
-
-          cat /tmp/result.json
-
-          python - <<'PY'
+            python - "$expected_invoice" "$expected_total" <<'PY'
           import json
+          import sys
 
+          expected_invoice = sys.argv[1]
+          expected_total = float(sys.argv[2])
           doc = json.load(open("/tmp/result.json"))
-          assert doc["status"] == "completed", doc
 
+          assert doc["status"] == "completed", doc
           result = doc["result"]
           assert result["documentType"] == "invoice", result
-          assert result["invoiceNumber"] == "INV-42", result
-          assert abs(float(result["total"]) - 1250.50) < 0.01, result
+          assert result["invoiceNumber"] == expected_invoice, result
+          assert abs(float(result["total"]) - expected_total) < 0.01, result
+          print("Verified:", result)
+          PY
+          }
 
-          print("E2E verification passed:", result)
+          verify_document /tmp/invoice.png INV-42 1250.50
+          verify_document /tmp/invoice.pdf INV-42 1250.50
+
+      - name: Verify document list endpoint
+        run: |
+          curl -fsS http://localhost:8080/api/documents > /tmp/documents.json
+          python - <<'PY'
+          import json
+          docs = json.load(open("/tmp/documents.json"))
+          assert len(docs) >= 2, docs
+          assert all(d["status"] == "completed" for d in docs[:2]), docs
+          print("Document list contains completed jobs")
           PY
 
       - name: Show container logs on failure
