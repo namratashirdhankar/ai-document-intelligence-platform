@@ -8,8 +8,8 @@ class Payload(BaseModel):
     text: str
 
 def mock_extract(text: str):
-    invoice = re.search(r'(?im)^\\s*invoice\\s*(?:no\\.?|number|#)\\s*[:#-]?\\s*([A-Z0-9-]+)', text)
-    total = re.search(r'(?im)^\\s*total\\b\\s*[:₹$]?\\s*([0-9,]+(?:\\.\\d{1,2})?)', text)
+    invoice = re.search(r'(?im)^\s*invoice\s*(?:no\.?|number|#)\s*[:#-]?\s*([A-Z0-9-]+)', text)
+    total = re.search(r'(?im)^\s*total\b\s*[:₹$]?\s*([0-9,]+(?:\.\d{1,2})?)', text)
     return {
         'provider': 'mock',
         'documentType': 'invoice' if 'invoice' in text.lower() else 'generic',
